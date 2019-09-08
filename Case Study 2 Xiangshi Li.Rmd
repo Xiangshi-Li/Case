@@ -1,0 +1,690 @@
+---
+title: "Case study 2"
+author: "Xiangshi Li"
+date: "8/14/2019"
+output: html_document
+---
+```{r setup}
+knitr::opts_chunk$set(warning=FALSE)
+```
+# Part 0: Reviews of Case study 1 and Abstract
+
+### Reviews
+
+"Are there a lot of variables with missing data (i.e., some variables with NA values?) - not NAs from the tidying process, but instead NAs that were already in the raw data (e.g., missing values for price?). If yes, please report it as a **data quality issue**. 
+
+Great start at tidying the data! Although what you have done is excellent, you still have some work left to **have a tidy dataset (e.g., sellers).** Can you please work on that and finish the tidying of the data for CS2?  
+
+Another thing is, while you have done a great job at cleaning, **the sellers variable is still not super clean.** Using **stringr and regular** expression to clean up some of the special characters will help. I would like for you to work on that as well. 
+
+Finally, I know there are tons of cool things you want to do for CS2 (e.g., find relationships between products)  but my advice is to really **focus on tidying the data** so that more meaningful analyses can be done. When we meet tomorrow for class, I will talk more in details what exactly I am looking for, and some of the steps you can take to get there. This is not to say you shouldn't do these things (if you can, do them all!), but is just to emphasize the priority for the analyses. "
+
+
+### Abstract
+
+* Examine the data quality and write loops to tidy all the data in each variables.
+* Write metadatas and separate the data set into 8 sub data sets.
+* Write functions and visualize data about manufacturers and find that Playmobil, Disney and LEGO have high dominance in the toy industry.
+* Visualize data about different categories and find that toys in vehicles, Bead Art & Jewelry-Making and Science Fiction categories are popular.
+* Visualize the distribution of price of different manufacturers and categories.
+* Visualize the distribution of also-bought and buy-after-view products of different manufacturers and categories.
+* Finished a linear regression and explore which manufacturer and category have better rating toys.
+
+# Part 1: Data quality and data cleaning
+
+```{r library and importing, include=FALSE}
+
+library(tidyverse)
+library(stringr)
+library(ggplot2)
+library(lubridate)
+library(readr)
+library(modelr)
+library(textdata)
+library(tidytext)
+library(tm)
+library(tidyr)
+library(ggpubr)
+amazon<-read_csv("Toys_Amazon.csv")
+```
+
+After importing the data into Rstudio, we can find that there are `r nrow(amazon)` observations and `r ncol(amazon)` variables in the data set.However, by checking the names of products, I can find that some of the products have same names. 
+```{r samename}
+same<-select(amazon,product_name)
+same<-same%>%
+  group_by(product_name)%>%
+  summarise(count=n())
+same<-arrange(same,desc(count))
+head(same,5)
+```
+There were `r nrow(same)` products that have more than 1 observations. They had same information on various variables but different unique id. After searching on the Internet and Amazon.com I believed that since the ids are different, I treated them as different products and kept these observations. 
+
+I needed to check the data quality, that is how many missing values are in different variables. Here I wrote a loop to calculate the number of missing values.
+
+```{r missingvaluenumber}
+nanumber<-data.frame(colnames(amazon))
+nacount<-c()
+for (x in colnames(amazon)){
+  nacount[[x]]=sum(is.na(amazon[[x]]))
+}
+nanumber$nacount<-nacount
+nanumber
+```
+
+This is the summary of NA values in different variables. Nearly all variables have NAs. While some variables such as "manufacturer" and "average_review_rating" have a few NAs, other variables such as "customer_questions_and_answers" have a huge amount of NAs. Although `r 100*round(sum(nanumber$nacount)/170000,2)` % of the data are NAs for the whole data set, which is OK for the following analyses, the data quality of different variables varies a lot.
+
+Next I tidied the data set for analyses. I can find the some values in certain variables, such as **price** , have the sign before the number. Meanwhile, the **ratings** of product are in the string format, which I need to transfer into number before making calculations. There are many data showed in a format that is hard to operate. I did the following steps to tidy the data and create a new data set for the following analyse.
+
+```{r data_cleaning, include=FALSE}
+#tidy the data about price
+amazon$price<-as.numeric(substr(as.vector(amazon$price),2,9))
+#tidy the data about stock. Partcularly I devided the data into 2 parts: number of stocks and condition of the stock
+amazon<-separate(amazon,number_available_in_stock,into = c("number_of_stock","condition"))
+amazon$number_of_stock<-as.numeric(amazon$number_of_stock)
+#tidy the data about average rating
+amazon$average_review_rating<-as.numeric(str_sub(as.vector(amazon$average_review_rating),0,3))
+#tidy the data about categories. I devided the original categories into 5 parts. 
+amazon<-separate(amazon,amazon_category_and_sub_category,into=c("cat1","cat2","cat3","cat4","cat5"),sep=" > ")
+#The categories have different levels. In this case study I used the last level of the category. I created a new variable named "cat_final" to store these information.
+cat_final<-c()
+#This is used to find the last category.
+for(i in 1:nrow(amazon)){
+  if(!is.na(amazon$cat5[i])){
+    cat_final[i]=amazon$cat5[i]
+  }else if(!is.na(amazon$cat4[i])){
+    cat_final[i]=amazon$cat4[i]
+  }else if(!is.na(amazon$cat3[i])){
+    cat_final[i]=amazon$cat3[i]
+  }else if(!is.na(amazon$cat2[i])){
+    cat_final[i]=amazon$cat2[i]
+  }else{
+    cat_final[i]=amazon$cat1[i]
+  }
+}
+
+amazon$cat_final<-cat_final
+#When dealing with the data about the products that customers also bought, I first of all calculated the number of also-bought products of each product. After that I devided the data into several parts, and each part shows a link of the product that bought with the product.
+also_bought_num=c()
+for (i in 1:nrow(amazon)){
+  u<-str_split(amazon$customers_who_bought_this_item_also_bought[[i]],"http")
+  also_bought_num[i]=length(u[[1]])-1
+}
+amazon$also_bought_num=also_bought_num
+#This code separates all of the also-bought products. There are up to 12 also-bought products. 
+amazon<-separate(amazon,customers_who_bought_this_item_also_bought,into=c("also_bought_1","also_bought_2","also_bought_3",
+                                                                          "also_bought_4","also_bought_5","also_bought_6",
+                                                                          "also_bought_7","also_bought_8","also_bought_9",
+                                                                          "also_bought_10","also_bought_11","also_bought_12"),sep=" \\| ")
+# In this part I dealt with the data about buy-after-review products. Again I first of all calculated the number of buy-after-review products, and then I separated these buy-after-review products by their links. 
+buy_after_view_num<-c()
+for (i in 1:nrow(amazon)){
+  u<-str_split(amazon$items_customers_buy_after_viewing_this_item[[i]],"http")
+  buy_after_view_num[i]=length(u[[1]])-1
+}
+amazon$buy_after_view_num=buy_after_view_num
+#There are up to 4 buy-after-view products for a choosen product.
+amazon<-separate(amazon,items_customers_buy_after_viewing_this_item,into = c("buy_after_view1","buy_after_view2","buy_after_view3","buy_after_view4"),sep=" \\| ")
+#Data about questions and answers have so many information that I used 2 steps to deal with them. First of all I separated all Question&Answers to 10 parts.
+x<-c("QA1","QA2","QA3","QA4","QA5","QA6","QA7","QA8","QA9","QA10")
+amazon<-separate(amazon,customer_questions_and_answers,into = x,sep=" \\| ")
+#After that I devided each part of the Question&Answer, and distinguishd questions and answers. I used a loop to make it. 
+for(m in x){
+  k<-str_sub(m,3,5)
+  a<-paste("Q",k,sep="")
+  b<-paste("A",k,sep="")
+  amazon<-separate(amazon,m,into=c(a,b),sep=" // ")
+}
+#For the review data, I separated each review and find that there are up to 8 reviews for a product. 
+reviewname<-c("review1","review2","review3","review4","review5","review6","review7","review8")
+amazon<-separate(amazon,customer_reviews,into = reviewname,sep=" \\| ")
+
+for(x in reviewname){
+  a<-paste(x,"short_review",sep="")
+  b<-paste(x,"rate",sep="")
+  c<-paste(x,"date",sep="")
+  d<-paste(x,"cus_name",sep="")
+  e<-paste(x,"long_review",sep="")
+  amazon<-separate(amazon,x,into = c(a,b,c,d,e),sep=" // ")
+}
+s<-seq(55,90,5)
+for(x in s){
+  amazon[[x]]<-as.numeric(amazon[[x]])
+  amazon[[x+1]]<-dmy(amazon[[x+1]])
+  amazon[[x+2]]<-str_split(str_split(amazon[[x+2]],"     "),"\\n")
+  for (m in 1:nrow(amazon)){
+    amazon[[x+2]][[m]]<-amazon[[x+2]][[m]][3]
+  }
+  amazon[[x+2]]<-as.vector(str_replace_all(amazon[[x+2]],"    ",""))
+}
+#I calculated the number of seller for each product. 
+sell_num=c()
+for( i in 1:nrow(amazon)){
+  u<-str_split(amazon$sellers[[i]],"Seller_name")
+  sell_num[i]=length(u[[1]])-1
+  }
+amazon$sell_num=sell_num
+#tidy the data about sellers
+sellernum<-c("seller1","seller2","seller3","seller4","seller5","seller6","seller7","seller8","seller9","seller10","seller11","seller12","seller13","seller14","seller15","seller16","seller17","seller18","seller19","seller20")
+amazon<-separate(amazon,sellers,into=sellernum,sep="\\\"\\}, \\{\\\"")
+
+for(x in sellernum){
+  a<-paste(x,"name",sep="")
+  b<-paste(x,"price",sep="")
+  amazon<-separate(amazon,x,into=c(a,b),sep=", ")
+}
+
+
+for(x in seq(95,133,2)){
+  amazon[[x]]<-str_replace(amazon[[x]],"10","1")
+  amazon[[x]]<-str_replace(amazon[[x]],"\\\"\\}\\]\\}","")
+  amazon[[x]]<-str_sub(amazon[[x]],21,30)
+  amazon[[x]]<-str_replace(amazon[[x]],"\\\"","")
+  amazon[[x]]<-readr::parse_number(amazon[[x]])
+}
+for (x in seq(95,133,2)){
+  amazon[[x-1]]<-str_sub(amazon[[x-1]],18,100)
+  amazon[[x-1]]<-str_replace(amazon[[x-1]],"ler\\_name\\_1\\\"=>\\\"","")
+  amazon[[x-1]]<-str_replace(amazon[[x-1]],"er\\_name\\_1\\\"=>\\\"","")
+  amazon[[x-1]]<-str_replace_all(amazon[[x-1]],"\\\"","")
+}
+```
+
+After finished tiding the data I got a data set with `r ncol(amazon)` variables! This made it inefficient to do the analyses. Here I separated the amazon data set into 5 new tables, and the metadata of different tables are listed as follow:
+
+```{r amazon_product}
+amazon_product<-select(amazon,uniq_id:price,number_of_reviews,number_of_answered_questions,average_review_rating,description,product_information,product_description,cat_final)
+head(amazon_product)
+```
+
+Metadata:
+
+* Uniq_id: [chr]  The id of toys on amazon.
+* Product_name: [chr]  The name of toys on amazon
+* manufacturer: [chr]  The item manufacturer, as reported on Amazon. 
+* price: [num] The price of different toys in dollar.
+* number_of_reviews: [num] The number of reviews in each toy.
+* number_of_answered_questions: [num] The count of how many questions are asked and answered.
+* average_review_rating: [num] The average rating score of a toy.  
+* description: [chr]  The introduction of the toy.
+* product_information: [chr]  Some detail information about the toy.
+* product_description: [chr]  The same as description. 
+* cat_final: [chr]  The categories that I defined as the final.
+
+```{r amazon_stock}
+amazon_stock<-select(amazon,uniq_id:manufacturer,number_of_stock,condition)
+head(amazon_stock)
+```
+Except the variables mentioned above, metadata about new variables are as followed:
+
+* number_of_stock: [num] Number of available stocks.
+* condition: [chr]  The condition of the stock product. Whether is new, used or other conditions. 
+
+```{r amazon_category}
+amazon_category<-select(amazon,uniq_id:manufacturer,cat1:cat5,cat_final)
+head(amazon_category)
+```
+
+metadata about new variables are as followed:
+
+* cat1-cat5: [chr]  The different levels of categories for a product. Some products have information about 5 sub-categories while some have just 1.
+* cat_final: [chr]  The categories that I defined as the final.
+
+```{r amazon_alsobought}
+amazon_alsobought<-select(amazon,uniq_id:manufacturer,cat_final,also_bought_1:also_bought_12,also_bought_num)
+head(amazon_alsobought)
+amazon_also_gather<-gather(amazon_alsobought,also_bought_1:also_bought_12,key="alsoid",value="also_bought")
+amazon_also_gather<-filter(amazon_also_gather,!is.na(also_bought))
+amazon_also_gather<-select(amazon_also_gather,uniq_id,also_bought)
+```
+
+metadata about new variables are as followed:
+
+* also_bought_1 - also_bought_12: [chr]  The links of also-bought products for a given toy. Some toys have up to 12 also-bought products.
+* also_bought_num: [num] The number of also-bought toys for a given toy.
+
+```{r amazon_buyafterview}
+amazon_buyafterview<-select(amazon,uniq_id:manufacturer,cat_final,buy_after_view1:buy_after_view4,buy_after_view_num)
+head(amazon_buyafterview)
+amazon_bav_gather<-gather(amazon_buyafterview,buy_after_view1:buy_after_view4,key="buyid",value="buy_after_view")
+amazon_bav_gather<-filter(amazon_bav_gather,!is.na(buy_after_view))
+amazon_bav_gather<-select(amazon_bav_gather,uniq_id,buy_after_view)
+```
+
+metadata about new variables are as followed:
+
+* buy_after_view1 - buy_after_view4: [chr]  The links of buy-after-view products for a given toy. Some toys have up to 4 buy-after-view products.(buy-after-view products: items that customers buy after viewing this item)
+* buy_after_view_num: [num] The number of buy_after_view toys for a given toy.
+
+```{r amazon_QA}
+amazon_QA<-select(amazon,uniq_id:manufacturer,Q1:A10)
+head(amazon_QA)
+q<-c("Q1","Q2","Q3","Q4","Q5","Q6","Q7","Q8","Q9","Q10")
+a<-c("A1","A2","A3","A4","A5","A6","A7","A8","A9","A10")
+
+amazon_q_gather<-gather(amazon_QA,q,key="qid",value="question")
+amazon_q_gather<-filter(amazon_q_gather,!is.na(question))
+amazon_q_gather<-select(amazon_q_gather,uniq_id,question)
+
+amazon_a_gather<-gather(amazon_QA,a,key="aid",value="answer")
+amazon_a_gather<-filter(amazon_a_gather,!is.na(answer))
+amazon_a_gather<-select(amazon_a_gather,uniq_id,answer)
+```
+
+metadata about new variables are as followed:
+
+* Q1 - Q10: [chr]  The questions asked about a product.
+* A1 - A10: [chr]  The answers provided for the questions about the product.
+
+```{r amazon_review}
+amazon_review<-select(amazon,uniq_id:manufacturer,average_review_rating,review1short_review:review8long_review)
+head(amazon_review)
+
+amazon_longreview<-select(amazon,uniq_id,ends_with("long_review"))
+amazon_longreview<-gather(amazon_longreview,"review1long_review","review2long_review","review3long_review","review4long_review","review5long_review","review6long_review","review7long_review","review8long_review",key="id",value="review")
+amazon_longreview<-filter(amazon_longreview,!is.na(review))
+
+amazon_shortreview<-select(amazon,uniq_id,ends_with("short_review"))
+amazon_shortreview<-gather(amazon_shortreview,"review1short_review","review2short_review","review3short_review","review4short_review","review5short_review","review6short_review","review7short_review","review8short_review",key="id",value="review")
+amazon_shortreview<-filter(amazon_shortreview,!is.na(review))
+
+amazon_datereview<-select(amazon,uniq_id,ends_with("date"))
+amazon_datereview<-gather(amazon_datereview,"review1date","review2date","review3date","review4date","review5date","review6date","review7date","review8date",key="id",value="date")
+amazon_datereview<-filter(amazon_datereview,!is.na(date))
+
+amazon_cus_name<-select(amazon,uniq_id,ends_with("cus_name"))
+amazon_cus_name<-gather(amazon_cus_name,"review1cus_name","review2cus_name","review3cus_name","review4cus_name","review5cus_name","review6cus_name","review7cus_name","review8cus_name",key="id",value="name")
+amazon_cus_name<-filter(amazon_cus_name,!is.na(name))
+
+amazon_ratereview<-select(amazon,uniq_id,ends_with("rate"))
+amazon_ratereview<-gather(amazon_ratereview,"review1rate","review2rate","review3rate","review4rate","review5rate","review6rate","review7rate","review8rate",key="id",value="rate")
+amazon_ratereview<-filter(amazon_ratereview,!is.na(rate))
+```
+
+metadata about new variables are as followed:
+
+* review1short_review - review8short_review: [chr]  The short review of a toy, usually a summary.
+* review1rate - review8rate: [num] The rating score of a review. 
+* review1date - review8date: [date] The date when the review was given. 
+* review1cus_name - review8cus_name: [chr]  The name of the customer who gave the review.
+* review1long_review - review8long_review: [chr]  The long review of a toy from the customer. 
+
+```{r amazon_seller}
+amazon_seller<-select(amazon,uniq_id:manufacturer,cat_final,seller1name:seller20price,sell_num)
+head(amazon_seller)
+```
+
+metadata about new variables are as followed:
+
+* seller1name - seller20name: [chr]  The name of the seller who sell this toy on amazon.
+* seller1price - seller20price: [num] The price of the toys from different seller . 
+* sell_num: [num] The number of sellers for a given product.
+
+There are so many variables in data set amazon_seller! In order to make it more easy to look, I gathered the variables about seller and created a new data set about sellers.
+
+```{r new seller}
+try<-amazon_seller
+
+try<-gather(try,"seller1name","seller2name","seller3name","seller4name",
+                "seller5name","seller6name","seller7name","seller8name",
+                "seller9name","seller10name","seller11name","seller12name",
+                "seller13name","seller14name","seller15name","seller16name",
+                "seller17name","seller18name","seller19name","seller20name",key="sellerid",value="sellername")
+try1<-amazon_seller
+try1<-gather(try1,"seller1price","seller2price","seller3price","seller4price",
+            "seller5price","seller6price","seller7price","seller8price",
+            "seller9price","seller10price","seller11price","seller12price",
+            "seller13price","seller14price","seller15price","seller16price",
+            "seller17price","seller18price","seller19price","seller20price",key="sellerid",value="sellerprice")
+
+try<-select(try,uniq_id,product_name,sellername)
+try$sellerprice<-try1$sellerprice
+amazon_seller_final<-filter(try,!is.na(sellername))
+head(amazon_seller_final)
+```
+
+metadata about new variables are as followed:
+
+* sellername: [chr]  The name of the seller who sell this toy on amazon.
+* sellerprice: [num] The price of the toys from different seller . 
+
+Now I'm ready to do the analyse work!
+
+## Part 2: Competition for different manufacturer
+
+While looking at the data set, the first question raised for me is about manufacturers. Which manufacturer is taking the lead in this industry? Let's take a look at the data about manufacturers:
+
+```{r manu_summary}
+head(unique(amazon_product),5)
+print(paste("number of manufacturer:",length(unique(amazon_product$manufacturer))))
+```
+
+From the summary I found that `r length(unique(amazon_product$manufacturer))` manufacturers are included in this data set. To understand which manufacturer is the most dominant, I needed to find some standards to measure the dominance. In this case study, I assumed that **number of sold products, number of reviews and number of sellers** can indicate the dominance.
+
+I take a look at the numbers of products, number of reviews, the number of seller from each manufacturer.Comparing with case study 1, this time I filled the chart with the color of 2019: Living Coral!
+
+```{r plot-number-of-prod-each-manu}
+data_manu<-amazon_product%>%
+  group_by(manufacturer)%>%
+  summarize(count=n(),number_of_reviews=sum(number_of_reviews,na.rm=T))
+
+manu1<-data_manu%>%
+  arrange(desc(count))%>%
+  head(8)%>%
+  ggplot(aes(x=reorder(manufacturer,count),y=count))+
+  geom_bar(stat="identity",fill="#FC766A",alpha=0.7)+
+  ggtitle("Number of products for different manufacturers")+
+  ylab("Number of products")+
+  xlab("Manufacturers")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  theme_classic()+
+  coord_flip()
+```
+
+```{r plot-sum-of-review-each-manu}
+data_manu<-arrange(data_manu,desc(number_of_reviews))
+manu2<-ggplot(head(data_manu,8),aes(x=reorder(manufacturer,number_of_reviews),y=number_of_reviews))+
+  geom_bar(stat="identity",fill="#FC766A",alpha=0.7)+
+  coord_flip()+
+  ggtitle("Number of total reviews for different manufacturers")+
+  ylab("Number of total reviews")+
+  xlab("Manufacturers")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  theme_classic()
+```
+
+```{r manu-sellers}
+data_sell<-amazon_seller%>%
+  group_by(manufacturer)%>%
+  summarize(sell_num=sum(sell_num,na.rm=T))%>%
+  arrange(desc(sell_num))
+manu3<-ggplot(head(data_sell,8),aes(x=reorder(manufacturer,sell_num),y=sell_num))+
+  geom_bar(stat="identity",fill="#FC766A",alpha=0.7)+
+  ggtitle("Number of total sellers for different manufacturers")+
+  ylab("Manufacturers")+
+  xlab("Number of sellers")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  theme_classic()+
+  coord_flip()
+
+ggarrange(manu1, manu2, manu3, ncol = 1, nrow = 3)
+
+```
+
+The number of product shows how many toys they have on the amazon. To figure out the manufacturers with dominance, I just showed the top 8 results. Manufacturer with more products are more likely to occupy more market share. The plot shows that **LEGO, Disney and Oxford Diecast** are the top 3 manufacturers that sell most toys on amazon, indicating their dominance in the toy industry.
+
+The bar chart shows the top 8 manufacturer that receives the most reviews. From the chart I found that **Playmobil and LEGO ** are the top 2. They get more reviews than others, indicating that they may have a larger sales volume and a better place in the market. 
+
+The bar chart show that **Playmobil, LEGO, Disney** also has a good performance on the seller market, which means that these brands are also the top choices for sellers. This can indicate the dominance of these brands.
+
+If I combined the 3 variables together to do the analyses, I could get a better understand on which manufacturer has better performance in general. Here I drew a radar plot to compare performance. Because the ggplot doesn't have radar plot function, I **wrote a function** to tidy the data for radar plot.
+
+```{r radarplot-manu}
+data_manu<-arrange(data_manu,desc(manufacturer))
+data_sell<-arrange(data_sell,desc(manufacturer))
+radarmanu<-data_manu
+radarmanu$sellernum<-data_sell$sell_num
+radarmanu<-filter(radarmanu,count>50,sellernum>300)
+
+radarplot<-function(dataframe,sep){
+  for (x in sep){
+    dataframe[[x]]<-dataframe[[x]]/max(dataframe[[x]])
+  }
+  
+  dataframe<-dataframe%>%
+    gather(sep,key="attrs",value="number")
+} 
+sep<-c("count","number_of_reviews","sellernum")
+radarmanu<-radarplot(radarmanu,sep)
+```
+
+There are so many manufacturers so I filtered the data to choose manufacturers with more than 50 products and 300 sellers to make the visualization easier to interpret. Here is the code to draw to radar plot.
+
+```{r radarplot}
+ggplot(radarmanu,aes(x=attrs,y=number))+
+  geom_polygon(aes(group = manufacturer,color=manufacturer),fill="white", alpha=0.1,size = 1.3)+
+  theme(axis.ticks.y = element_blank(),
+          axis.text.y = element_blank()) +
+  xlab("") + ylab("") +
+  ggtitle("Radar plot for manufacturer")+
+  coord_polar()
+```
+
+From the radar plot I found that **LEGO** and **Playmobil** have good performances in 3 variables and have larger areas comparing with other manufacturers. They have outstanding data in seller numbers, number of products and total number of reviews. So I concluded that **LEGO** and **Playmobil** are playing dominant roles on the market. 
+
+## Part 3: Preference on different category
+
+Another question for me is that which kind of toys is more popular? There are many ways to category products. Amazon use a category and sub_category method. As I mentioned in the data cleaning process, I used the last level of the raw data as the category. 
+
+```{r cat_summary}
+amazon_category<-amazon_category%>%
+  filter(!is.na(cat_final))
+head(unique(amazon_category$cat_final,5))
+print(paste("number of categories:",length(unique(amazon_category$cat_final))))
+```
+
+I divided all the products into `r length(unique(amazon_category$cat_final))` categories. After that, I needed to define what indicates popularity. In this case, I used **the number of products** and **number of reviews** to show the popularity, assuming that more products means customer's choice and popularity and that larger number of review means more comments and concerns from customers. 
+
+```{r catdata group}
+data_cat<-amazon_product%>%
+  group_by(cat_final)%>%
+  summarize(count=n(),number_of_reviews=sum(number_of_reviews,na.rm=T))
+data_cat<-filter(data_cat,!cat_final=="")
+
+```
+
+```{r cat-number-of-product-plot}
+data_cat<-arrange(data_cat,desc(count))
+cat1<-ggplot(head(data_cat,15),aes(x=reorder(cat_final,count),y=count))+
+  geom_bar(stat="identity",fill="#FC766A",alpha=0.7)+
+  ggtitle("Number of products for different categories")+
+  ylab("Number of products")+
+  xlab("Categories")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  theme_classic()+
+  coord_flip()
+```
+
+```{r cat-number-of-review-plot}
+data_cat<-arrange(data_cat,desc(number_of_reviews))
+cat2<-ggplot(head(data_cat,15),aes(x=reorder(cat_final,number_of_reviews),y=number_of_reviews))+
+  geom_bar(stat="identity",fill="#FC766A",alpha=0.7)+
+  ggtitle("Number of reviews for different categories")+
+  ylab("Number of total reviews")+
+  xlab("Categories")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  theme_classic()+
+  coord_flip()
+```
+
+```{r cat-sellers}
+data_sell<-amazon_seller%>%
+  group_by(cat_final)%>%
+  summarize(sell_num=sum(sell_num,na.rm=T))%>%
+  arrange(desc(sell_num))
+data_sell<-filter(data_sell,!is.na(cat_final))
+cat3<-ggplot(head(data_sell,15),aes(x=reorder(cat_final,sell_num),y=sell_num))+
+  geom_bar(stat="identity",fill="#FC766A",alpha=0.7)+
+  ggtitle("Number of total sellers for different categories")+
+  ylab("categories")+
+  xlab("Number of sellers")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  theme_classic()+
+  coord_flip()
+ggarrange(cat1, cat2, cat3, ncol = 1, nrow = 3)
+```
+
+The plot shows that **Vehicles, Science Fiction& Fantasy and Bead Art & Jewelry-Making** has the most number of products. 
+
+The plot shows that **Bead Art & Jewellery-Making, Dice&Dice Games and Card Games**has the most reviews("Toy" category is so ambiguous for analyse that I don't count it.). This somehow shows the popularity.
+
+The plot shows that toys in **vehicles and science fiction & fantasy** have more sellers, indicating that they have more popularity on the market.
+
+This time I drew a radar plot to see the performance of different categories in different variables. Before drawing the plot I just kept the categories with more than 200 products and 500 sellers, and I dropped **Toys** category because it's so ambiguous for analyse.
+
+```{r radarplotdata-cat}
+data_cat<-arrange(data_cat,desc(cat_final))
+data_sell<-arrange(data_sell,desc(cat_final))
+radarcat<-data_cat
+radarcat$sellernum<-data_sell$sell_num
+radarcat<-filter(radarcat,count>200,sellernum>500)
+radarcat<-filter(radarcat,cat_final!="Toys")
+sep<-c("count","number_of_reviews","sellernum")
+radarcat<-radarplot(radarcat,sep)
+```
+
+```{r radarplot-cat}
+ggplot(radarcat,aes(x=attrs,y=number))+
+  geom_polygon(aes(group = cat_final,  color = cat_final),fill="white", alpha=0.1,size = 1.5)+
+  theme(axis.ticks.y = element_blank(),
+          axis.text.y = element_blank()) +
+  xlab("") + ylab("") +
+  ggtitle("Radar plot for categories")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  coord_polar()
+```
+
+It's hard to say which category has better performance on 3 variables. By comparing the area of different category I concluded in general that toys in **Vehicles** and **Science Fiction & Fantasy** is more popular.
+
+## Part 4: price of different manufacturer and category
+
+I really concerned about what is the distribution of the price. I took a look at price for different manufacturers. There are so many manufacturers so I just keep the top 10 manufacturers with most products.
+
+```{r price1}
+data_price1<-amazon_product%>%
+  group_by(manufacturer)%>%
+  summarize(count=n())
+data_price1<-head(arrange(data_price1,desc(count)),8)
+data_price1<-filter(amazon_product,manufacturer %in% as.vector(data_price1$manufacturer))
+price1<-ggplot(data_price1,aes(x=manufacturer,y=price))+
+  geom_hline(yintercept = 20,col="#FC766A",size=1.5)+
+  geom_violin(draw_quantiles=c(0.25,0.5,0.75),scale="width")+
+  xlab("Manufacturer")+
+  ylab("Price")+
+  ggtitle("Price distributions of toys in different manufacturers")+
+  coord_flip()+
+  theme_classic()
+
+```
+
+```{r price2}
+data_price2<-amazon_product%>%
+  group_by(cat_final)%>%
+  summarize(count=n())
+data_price2<-filter(data_price2,!is.na(cat_final))
+data_price2<-head(arrange(data_price2,desc(count)),8)
+data_price2<-filter(amazon_product,cat_final %in% as.vector(data_price2$cat_final))
+price2<-ggplot(data_price2,aes(x=cat_final,y=price))+
+  geom_violin(draw_quantiles=c(0.25,0.5,0.75),scale="width")+
+  geom_hline(yintercept = 15,col="#FC766A",size=1.5)+
+  ggtitle("Price distributions of toys in different categories")+
+  xlab("Categories")+
+  ylab("Price")+
+  coord_flip()+
+  theme_classic()
+
+ggarrange(price1, price2,ncol = 1, nrow = 2)
+```
+
+Comparing with case study 1, this time I added a line to show the price of 20 dollar. The plot shows that for the top 10 manufacturers, most of their product's price are similar and the medians are around 20. Toys in **MyTinyWorld** have a lower price than others. Toys in **LEGO, Hasbro and Mattel** have larger range in price and some of their toys are more than $300!
+
+The plot shows that for the top 10 categories, most of their product's price are similar and the medians are less than 15. Toys in **Vehicles,Science Fiction & Fantasy and Packs & Sets** have larger range in price and some of their toys are more than $400!
+
+## Part5: Products with the most influence 
+
+The data set contains information about items that also bought when customers purchased a products. This is a recommendation engine component that played a big role in making Amazon popular initially. It also has data about items that customers view after buying a product. This can somehow show the relationship among different products.
+
+In this part I decided to explore the products that has big influence on other products. I took a look at which manufacturers and category has most also-bought products and after-bought-view products.
+
+For the also-bought products, I first drew plots on the distribution of the number of  also-bought products. 
+
+```{r also-bought1}
+a1<-ggplot(amazon_alsobought,aes(x=factor(also_bought_num)))+
+  geom_bar(fill="#FC766A",alpha=0.7)+
+  ggtitle("Distributions of also-bought products")+
+  xlab("number of also-bought products")+
+  ylab("count")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  theme_classic()
+```
+
+```{r buy-after-view1}
+b1<-ggplot(amazon_buyafterview,aes(x=factor(buy_after_view_num)))+
+  geom_bar(fill="#FC766A",alpha=0.7)+
+  ggtitle("Distributions of buy-after-view products")+
+  xlab("number of buy-after-view products")+
+  ylab("count")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  theme_classic()
+ggarrange(a1,b1,nrow=2,ncol=1)
+```
+
+The Plot shows that most of the products have 6 also-bought products, indicating that more than 70% of the toys are bought with 6 other toys. 
+
+The Plot shows that most of the products have 4 buy-after-view products, indicating that for more than 70% of the toys, customers buy 4 other items after view these toys. 
+
+## part6: Predict the best review
+
+In this part I concerned about how to predict the information of reviews of different products. I used **rate** to show the satisfaction from customers and assumed that the better rates, the better reviews. 
+
+First of all I took a look on the distribution of the average reviews rating. I drew a bar chart to show the result.
+
+```{r distribution of average rating}
+ggplot(amazon_product,aes(x=average_review_rating))+
+  geom_bar(fill="#FC766A",alpha=0.7)+
+  ggtitle("Distributions of average ratings")+
+  xlab("Average rating")+
+  ylab("count")+
+  theme(plot.title = element_text(lineheight=.8, face="bold")) +
+  theme_classic()
+```
+
+More than half of the toys have a average rating of 5. Now I wanted to find factors that influence the average review rating.
+
+I decided to see whether toys in certain manufacturers and categories may more likely to have higher average rates. I drew a plot to show the distribution of rates for different manufacturers. I just kept manufacturers and categories with more than 30 products because these manufacturers can provide adequate evidence. 
+
+```{r predict_rating_manu}
+data_predict<-amazon_product%>%
+  group_by(manufacturer)%>%
+  summarize(count=n(),average_review_rating=mean(average_review_rating,na.rm=TRUE))
+data_predict<-filter(data_predict,count>=30,!is.na(manufacturer))
+data_predict<-arrange(data_predict,desc(average_review_rating))
+data_predict<-head(data_predict,10)
+data_predict<-arrange(filter(amazon_product,manufacturer %in% as.vector(data_predict$manufacturer)),desc(average_review_rating))
+pre1<-ggplot(filter(data_predict,average_review_rating>3.5),aes(x=reorder(manufacturer,average_review_rating,FUN = mean),y=average_review_rating))+
+  geom_boxplot()+
+  geom_point(position="jitter",alpha=0.3,col="#FC766A")+
+  ggtitle("Boxplot of rate for categories")+
+  xlab("Categories")+
+  ylab("Rate")+
+  coord_flip()+
+  theme_classic()
+```
+
+```{r predict_rating_cat}
+data_predict<-amazon_product%>%
+  group_by(cat_final)%>%
+  summarize(count=n(),average_review_rating=mean(average_review_rating,na.rm=TRUE))
+data_predict<-filter(data_predict,count>=30,!is.na(cat_final))
+data_predict<-arrange(data_predict,desc(average_review_rating))
+data_predict<-head(data_predict,10)
+data_predict<-arrange(filter(amazon_product,cat_final %in% as.vector(data_predict$cat_final)),desc(average_review_rating))
+pre2<-ggplot(filter(data_predict,average_review_rating>3.5),aes(x=reorder(cat_final,average_review_rating,FUN = mean),y=average_review_rating))+
+  geom_boxplot()+
+  geom_point(position="jitter",alpha=0.3,col="#FC766A")+
+  ggtitle("Boxplot of rate for categories")+
+  xlab("Categories")+
+  ylab("Rate")+
+  coord_flip()+
+  theme_classic()
+ggarrange(pre1,pre2,nrow=2,ncol=1)
+```
+
+The boxplot orders the mean of rate from bottom to top. I found that **AUTOart, Kato and MyTinyWorld** have most of their rates on 5 while others manufacturers have more rates below 5. So **AUTOart, Kato and MyTinyWorld**  seem to have more possibility to get better reviews on each of the product because they have higher average rate, and smaller range.
+
+The plot orders the mean of rate from bottom to top, so **Dolls' House & Accessories, Collectible Figures & Accessories and Tanks**  seem to have more possibility to get better reviews on each of the product because they have higher average rate, and smaller range on high scores.
+
+## Part7: What's next?
+
+I want to do sentiment analysis but I can't make it. This made me felt extremely nervous. I'm sorry that I didn't finish sentiment analysis and I will try to do this later. 
+
+Meanwhile, I think to predict the average rating it's important to find some new predict variables. The result of the regression is so meaningless. May by doing some other researches I can find new variables. I guess maybe by doing sentiment analysis I can gather a score from reviews and use the score to predict average ratings. 
